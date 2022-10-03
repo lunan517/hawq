@@ -182,6 +182,12 @@ validate_exec(const char *path)
  * This function is not thread-safe because it calls validate_exec(),
  * which calls getgrgid().	This function should be used only in
  * non-threaded binaries, not in library routines.
+ *
+ * 我们必须努力寻找绝对路径的原因是，在某些平台上，除非我们知道可执行文件的位置，否则无法进行动态加载。
+ * 此外，我们需要一个完整路径而不是相对路径，因为我们稍后将更改工作目录。
+ * 最后，我们需要一个真正的路径，而不是符号链接位置，这样我们就可以找到与可执行文件相关的安装中的其他文件。
+ * 此函数不是线程安全的，因为它调用validate_exec（），后者调用getgrgid（）。
+ * 此函数只能在非线程二进制文件中使用，而不能在库例程中使用。
  */
 int
 find_my_exec(const char *argv0, char *retpath)
@@ -615,6 +621,7 @@ pclose_check(FILE *stream)
  *
  *	Set application-specific locale and service directory
  *
+ * 设置应用程序特定的区域设置和服务目录
  *	This function takes the value of argv[0] rather than a full path.
  *
  * (You may be wondering why this is in exec.c.  It requires this module's
@@ -630,26 +637,36 @@ set_pglocale_pgservice(const char *argv0, const char *app)
 																 * PGLOCALEDIR */
 
 	/* don't set LC_ALL in the backend */
+	// setlocale(LC_ALL, "en_US.UTF-8"); // the C locale will be the UTF-8 enabled English
 	if (strcmp(app, PG_TEXTDOMAIN("postgres")) != 0)
 		setlocale(LC_ALL, "");
 
+	// 取得绝对路径
 	if (find_my_exec(argv0, my_exec_path) < 0)
 		return;
 
 #ifdef ENABLE_NLS
+	// https://blog.csdn.net/qq_40310161/article/details/112575492
+	// 国际化语言支持
+	// https://www.cnblogs.com/zechen11/archive/2011/11/09/2243342.html
+	// 设置文本域目录及文本域文件
 	get_locale_path(my_exec_path, path);
 	bindtextdomain(app, path);
 	textdomain(app);
 
+	// (libpq)PGLOCALEDIR 设置包含信息国际化的locale文件目录。
 	if (getenv("PGLOCALEDIR") == NULL)
 	{
 		/* set for libpq to use */
 		snprintf(env_path, sizeof(env_path), "PGLOCALEDIR=%s", path);
 		canonicalize_path(env_path + 12);
+		// putenv函数构造的环境变量只存活当前函数执行范围内，setenv 函数构造的环境变量存活于当前进程内
+		// strdup分配内存并复制一份
 		putenv(strdup(env_path));
 	}
 #endif
 
+	// (libpq)PGSYSCONFDIR  设置包含pg_service.conf文件。
 	if (getenv("PGSYSCONFDIR") == NULL)
 	{
 		get_etc_path(my_exec_path, path);

@@ -148,6 +148,11 @@ static size_t real_act_prefix_size;
  * overwritten during init_ps_display.	Also, the physical location of the
  * environment strings may be moved, so this should be called before any code
  * that might try to hang onto a getenv() result.)
+ *
+ * 在启动初期调用此命令以保存原始argc/argv值。
+ * 如果需要，我们制作原始argv[]阵列的副本，以防止它被后续的ps_display操作破坏。
+ * （原始argv[]不会被此例程覆盖，但在init_ps_display期间可能会被覆盖。
+ * 此外，环境字符串的物理位置可能会被移动，因此应该在任何可能尝试挂起getenv（）结果的代码之前调用此命令。）
  */
 char	  **
 save_ps_display_args(int argc, char **argv)

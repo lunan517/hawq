@@ -67,17 +67,24 @@ static inline bool AllocSizeIsValid(Size sz)
  * such as owning memory context, memoryAccount, memory account generation etc.
  * match. This sharing mechanism optimizes memory consumption by "refactoring"
  * common chunk properties.
+ *
+ * *如果共享信息（如拥有内存上下文、memoryAccount、内存帐户生成等）匹配，则多个块可以共享SharedChunkHeader。
+ * 这种共享机制通过“重构”公共块属性来优化内存消耗。
  */
 typedef struct SharedChunkHeader
 {
 	MemoryContext context;		/* owning context */
-	struct MemoryAccount* memoryAccount; /* Which account to charge for this memory. */
+	struct MemoryAccount* memoryAccount; /* Which account to charge for this memory. 此内存的收费帐户 */
 	/*
 	 * The generation of "memoryAccount" pointer. If the generation
 	 * is not equal to current memory account generation
 	 * (MemoryAccountingCurrentGeneration), we do not
 	 * release accounting through "memoryAccount". Instead, we
 	 * release the accounting of RolloverMemoryAccount.
+	 *
+	 * *“memoryAccount”指针的生成。
+	 * 如果生成不等于当前内存帐户生成（MemoryAccountingCurrentGeneration），我们不会通过“memoryAccount”释放帐户。
+	 * 相反，我们发布了RolloverMemoryAccount的记帐。
 	 */
 	uint16 memoryAccountGeneration;
 
@@ -145,6 +152,12 @@ typedef struct StandardChunkHeader
  * With the current parameters, request sizes up to 8K are treated as chunks,
  * larger requests go into dedicated blocks.  Change ALLOCSET_NUM_FREELISTS
  * to adjust the boundary point.
+ *
+ * 区块空闲列表k包含大小为1<<（k+ALLOC_MINBITS）的区块，对于k=0..ALLOCSET_NUM_FREELISTS-1。
+请注意，自由列表中的所有区块都有断电2大小。这提高了可回收性：我们可能会浪费一些空间，但随着请求的提出和释放，浪费的空间应该保持相当稳定。
+对于上一个空闲列表来说，过大的请求是通过从malloc（）分配一个专用块来处理的。这个块仍然有一个块头和块头，但是当块被释放时，我们将把整个块返回给malloc（），而不是放在自由列表中。
+警告：ALLOC_MINBITS必须足够大，以使1<<ALLOC_MIN BITS至少为MAXALIGN，否则我们可能无法充分对齐最小的块。在所有当前已知的机器上，8字节对齐就足够了。
+使用当前参数，最大8K的请求被视为块，较大的请求进入专用块。更改ALLOCSET_NUM_FREELISTS以调整边界点。
  *--------------------
  */
 
@@ -164,19 +177,24 @@ typedef struct AllocChunkData *AllocChunk;
  * we may still have a keeper block.  It's also different from the set being
  * logically empty, because we don't attempt to detect pfree'ing the last
  * active chunk.
+ *
+ * AllocSetContext是MemoryContext的标准实现。
+ * 注意：isReset表示AllocSetReset没有任何操作。
+ * 这与实际为空的集合（空块列表）不同，因为我们可能仍然有一个保持块。
+ * 它也不同于逻辑上为空的集合，因为我们不会尝试检测释放最后一个活动块。
  */
 typedef struct AllocSetContext
 {
 	MemoryContextData header;	/* Standard memory-context fields */
 	/* Info about storage allocated in this context: */
 	AllocBlock	blocks;			/* head of list of blocks in this set */
-	AllocChunk	freelist[ALLOCSET_NUM_FREELISTS];		/* free chunk lists */
-	bool		isReset;		/* T = no space alloced since last reset */
+	AllocChunk	freelist[ALLOCSET_NUM_FREELISTS];		/* free chunk lists 可用区块列表 */
+	bool		isReset;		/* T = no space alloced since last reset 自上次重置后未分配空间 */
 	/* Allocation parameters for this context: */
 	Size		initBlockSize;	/* initial block size */
 	Size		maxBlockSize;	/* maximum block size */
 	Size		nextBlockSize;	/* next block size to allocate */
-	AllocBlock	keeper;			/* if not NULL, keep this block over resets */
+	AllocBlock	keeper;			/* if not NULL, keep this block over resets 在重置时保持此块 */
 
 	/* Points to the head of the sharedHeaderList */
 	SharedChunkHeader *sharedHeaderList;
@@ -187,6 +205,7 @@ typedef struct AllocSetContext
 	/*
 	 * allocList maintains a list of chunks (double linked list) that are
 	 * currently allocated.
+	 * allocList维护当前分配的块列表（双链接列表）。
 	 */
 	AllocChunk  allocList;
 #endif

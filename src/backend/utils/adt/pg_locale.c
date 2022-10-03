@@ -120,6 +120,7 @@ pg_perm_setlocale(int category, const char *locale)
 	char	   *envbuf;
 
 #ifndef WIN32
+	// 地域名称 = setlocale(地域设置的影响范围，地域名称);
 	result = setlocale(category, locale);
 #else
 
@@ -186,6 +187,7 @@ pg_perm_setlocale(int category, const char *locale)
 
 	snprintf(envbuf, LC_ENV_BUFSIZE - 1, "%s=%s", envvar, result);
 
+	// 放入环境变量
 	if (putenv(envbuf))
 		return NULL;
 

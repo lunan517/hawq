@@ -64,6 +64,8 @@ main(int argc, char *argv[])
 
 	/*
 	 * Platform-specific startup hacks
+	 *
+	 * 对各种操作系统和cpu架构做相应的检查和处理
 	 */
 	startup_hacks(progname);
 
@@ -77,6 +79,16 @@ main(int argc, char *argv[])
 	 * extra room. Therefore this should be done as early as possible during
 	 * startup, to avoid entanglements with code that might save a getenv()
 	 * result pointer.
+	 *
+	 * 保存最初的argv[]的物理位置，以供ps显示使用。
+	 * 在某些平台上，必须覆盖写argv[]存储才能设置ps的进程标题。
+	 * 在这种情况下，save_ps_display_args会生成并返回argv[]的新副本。
+	 * save_ps_display_args还可以移动环境字符串以腾出额外空间。
+	 * 因此，这应该在启动期间尽早完成，以避免与可能保存getenv（）结果指针的代码纠缠。
+	 *
+	 * new_argv = (char **) malloc
+	 * new_orgv <- argv
+	 * return new_argv
 	 */
 	argv = save_ps_display_args(argc, argv);
 
@@ -87,8 +99,12 @@ main(int argc, char *argv[])
 	 * available to fill pg_control during initdb.	LC_MESSAGES will get set
 	 * later during GUC option processing, but we set it here to allow startup
 	 * error messages to be localized.
+	 *
+	 * 在环境中设置“区域设置信息”。
+	 * 请注意，如果我们在一个已经初始化的数据库中，LC_CTYPE和LC_COLLATE稍后将从pg_control中重写。
+	 * 我们在这里设置它们，以便它们可以在initdb期间填充pg_control。
+	 * LC_MESSAGES稍后将在GUC选项处理期间设置，但我们在此处设置它以允许本地化启动错误消息。
 	 */
-
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("postgres"));
 
 #ifdef WIN32
@@ -99,14 +115,18 @@ main(int argc, char *argv[])
 	 * LC_CTYPE. We have to do this because initdb passes those values in the
 	 * environment. If there is nothing there we fall back on the codepage.
 	 */
+	// 数据库参数说明
+    // pg_perm_setlocale 地域设置，并putenv到环境变量
 	{
 		char	   *env_locale;
 
+        //LC_COLLATE 字符串排序的顺序
 		if ((env_locale = getenv("LC_COLLATE")) != NULL)
 			pg_perm_setlocale(LC_COLLATE, env_locale);
 		else
 			pg_perm_setlocale(LC_COLLATE, "");
 
+        //LC_CTYPE 字符分类
 		if ((env_locale = getenv("LC_CTYPE")) != NULL)
 			pg_perm_setlocale(LC_CTYPE, env_locale);
 		else
@@ -118,6 +138,7 @@ main(int argc, char *argv[])
 #endif
 
 #ifdef LC_MESSAGES
+    //LC_MESSAGES 消息的语言
 	pg_perm_setlocale(LC_MESSAGES, "");
 #endif
 
@@ -125,8 +146,11 @@ main(int argc, char *argv[])
 	 * We keep these set to "C" always, except transiently in pg_locale.c; see
 	 * that file for explanations.
 	 */
+    //LC_MONETARY 货币使用的格式
 	pg_perm_setlocale(LC_MONETARY, "C");
+    //LC_NUMERIC 数字使用的格式
 	pg_perm_setlocale(LC_NUMERIC, "C");
+    //LC_TIME 时间日期使用的格式
 	pg_perm_setlocale(LC_TIME, "C");
 
 	/*
@@ -148,6 +172,9 @@ main(int argc, char *argv[])
 		}
 		if (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0)
 		{
+		    // 自动配置
+		    // https://www.gnu.org/savannah-checkouts/gnu/autoconf/manual/autoconf-2.71/autoconf.html#Introduction
+		    // /* src/include/pg_config.h.in.  Generated from configure.in by autoheader.  */
 			puts("postgres (HAWQ) " PG_VERSION);
 			exit(0);
 		}
@@ -163,6 +190,8 @@ main(int argc, char *argv[])
 		}
 		if (strcmp(argv[1], "--catalog-version") == 0 )
 		{
+		    // C:\Workspace\hawq\src\include\catalog\catversion.h
+		    // #define CATALOG_VERSION_NO      201507221
 			printf(_("Catalog version number:               %u\n"),
 				   CATALOG_VERSION_NO);
 			exit(0);
@@ -177,9 +206,10 @@ main(int argc, char *argv[])
 	/*
 	 * Dispatch to one of various subprograms depending on first argument.
 	 */
-
+// GCC编译器中使用-D参数在编译阶段定义
 #ifdef EXEC_BACKEND
 	if (argc > 1 && strncmp(argv[1], "--fork", 6) == 0)
+	    // C:\Workspace\hawq\src\backend\postmaster\postmaster.c
 		exit(SubPostmasterMain(argc, argv));
 #endif
 
@@ -191,6 +221,7 @@ main(int argc, char *argv[])
 	 * SubPostmasterMain() will do this for itself, but the remaining modes
 	 * need it here
 	 */
+	// win32系统的signal/Event处理机制初始化
 	pgwin32_signal_initialize();
 #endif
 
@@ -238,31 +269,67 @@ main(int argc, char *argv[])
  * XXX The need for code here is proof that the platform in question
  * is too brain-dead to provide a standard C execution environment
  * without help.  Avoid adding more here, if you can.
+ *
+ * 在此处放置平台特定的启动黑客。
+ * 这是放置代码的正确位置，必须在运行下列情况的早期执行，启动postmaster、独立后端或独立引导。
+ * 请注意，当服务器分叉后端或子引导运行时，不会执行此代码。
+ * XXX这里对代码的需求证明，所讨论的平台太死板，在没有帮助的情况下无法提供标准的C执行环境。
+ * 如果可以，请避免在此处添加更多内容。
  */
 static void
 startup_hacks(const char *progname)
 {
+    // NOFIXADE在port/osf.h和ultrix4.h中有定义
+    // 各式各样的Unix衍生产品。如AIX、Solaris、HP-UX、IRIX、OSF、Ultrix等等。
+    // ULTRIX是Digital Equipment Corporation于1984年为VAX 最初发布的Unix 操作系统的本机版本的名称。
+    // 1991年底，与System V针锋相对的开放软件基金会(Open Software Foundation)推出了OSF/1。
+    // Alpha处理器最早由DEC公司设计制造，目前国内采用此架构的是申微超算处理器
+    // 目前市场上的CPU分类主要分有两大阵营，一个是intel、AMD为首的复杂指令集CPU，另一个是以IBM、ARM为首的精简指令集CPU。
+    // 不同品牌的CPU，其产品的架构也不相同。
+    // Intel、AMD的CPU是X86架构，IBM公司的CPU是PowerPC架构，ARM公司的CPU是ARM架构，国内的飞腾CPU也是ARM架构。
+    // 此外还有MPIS架构、SPARC架构、Alpha架构
+
+
 #if defined(__alpha)			/* no __alpha__ ? */
 #ifdef NOFIXADE
 	int			buffer[] = {SSIN_UACPROC, UAC_SIGBUS | UAC_NOPRINT};
 #endif
 #endif   /* __alpha */
-
-
 	/*
 	 * On some platforms, unaligned memory accesses result in a kernel trap;
 	 * the default kernel behavior is to emulate the memory access, but this
 	 * results in a significant performance penalty. We ought to fix PG not to
 	 * make such unaligned memory accesses, so this code disables the kernel
 	 * emulation: unaligned accesses will result in SIGBUS instead.
+	 *
+	 * 在某些平台上，未对齐的内存访问会导致内核陷阱；默认的内核行为是模拟内存访问，但这会导致严重的性能损失。
+	 * 我们应该修复PG，使其不进行这种未对齐的内存访问，因此此代码禁用内核仿真：未对齐的访问将导致SIGBUS。
 	 */
 #ifdef NOFIXADE
 
 #if defined(ultrix4)
+	// 系统调用，地址对齐
+	// MIPS 下使用访存指令读取或写入数据单元时，目标地址必须是所访问之数据单元字节数的整数倍，这个叫做地址对齐。
+	// https://blog.csdn.net/zmc1216/article/details/44782183
+	// https://www.jianshu.com/p/552facb28e58
 	syscall(SYS_sysmips, MIPS_FIXADE, 0, NULL, NULL, NULL);
 #endif
 
 #if defined(__alpha)			/* no __alpha__ ? */
+    //http://www2.phys.canterbury.ac.nz/dept/docs/manuals/unix/DEC_5.0a_Docs/HTML/MAN/MAN2/0124____.HTM
+    //setsysinfo - 设置系统信息
+    //SSI_NVPAIRS
+    //  此操作使用成对的值或其命名的等价物来
+    //  修改系统行为。缓冲区变量是成对的数组
+    //  值（或其命名的等价物）。
+    //SSIN_UACPROC在proc结构
+    //  中设置的值。这个值是成对的
+    //  带有 UAC 标志 UAC_NOPRINT、UAC_NOFIX 和 UAC_SIGBUS，在
+    //  任何组合，包括OR。因此，它切换
+    //  打印“未对齐访问修复”消息，修复 UAC
+    //  故障，并向线程传递 SIGBUS 信号。
+    //UAC_NOPRINT禁止将未对齐的错误消息打印到用户。
+    //UAC_SIGBUS导致将 SIGBUS 信号传递给线程。
 	if (setsysinfo(SSI_NVPAIRS, buffer, 1, (caddr_t) NULL,
 				   (unsigned long) NULL) < 0)
 		write_stderr("%s: setsysinfo failed: %s\n",
@@ -280,7 +347,14 @@ startup_hacks(const char *progname)
 		setvbuf(stdout, NULL, _IONBF, 0);
 		setvbuf(stderr, NULL, _IONBF, 0);
 
-		/* Prepare Winsock */
+		/* Prepare Winsock
+		 * WSAStartup必须是应用程序或DLL调用的第一个Windows Sockets函数。
+		 * 它允许应用程序或DLL指明Windows Sockets API的版本号及获得特定Windows Sockets实现的细节。
+		 * 应用程序或DLL只能在一次成功的WSAStartup()调用之后才能调用进一步的Windows Sockets API函数。
+		 *
+		 * 此处为2.2版
+		 *
+		 * */
 		err = WSAStartup(MAKEWORD(2, 2), &wsaData);
 		if (err != 0)
 		{
@@ -396,6 +470,13 @@ check_root(const char *progname)
 	 * is root.  (Since nobody actually uses postgres as a setuid program,
 	 * trying to actively fix this situation seems more trouble than it's
 	 * worth; we'll just expend the effort to check for it.)
+	 *
+	 * 还要确保真实的和有效的uid是相同的。
+	 * 从根shell作为setuid程序执行是一个安全漏洞，因为在许多平台上，如果真正的uid是root，邪恶的子例程可能会将uid设置回root。
+	 * （因为实际上没有人使用postgres作为setuid程序，所以尝试主动修复这种情况似乎比实际情况要麻烦得多；我们只需花费精力进行检查。）
+	 *
+	 * geteuid()：返回有效用户的ID
+	 * getuid()：返回实际用户的ID。
 	 */
 	if (getuid() != geteuid())
 	{

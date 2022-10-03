@@ -235,6 +235,7 @@ AuxiliaryProcessMain(int argc, char *argv[])
 	 * If we are running under the postmaster, this is done already.
 	 */
 	if (!IsUnderPostmaster)
+	    // 启动内存上下文子系统
 		MemoryContextInit();
 
 	/* Compute paths, if we didn't inherit them from postmaster */

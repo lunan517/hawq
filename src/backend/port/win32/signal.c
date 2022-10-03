@@ -55,6 +55,7 @@ pg_usleep(long microsec)
 							(microsec < 500 ? 1 : (microsec + 500) / 1000))
 		== WAIT_OBJECT_0)
 	{
+	    // 调用 pgwin32_signal_event 处理过程
 		pgwin32_dispatch_queued_signals();
 		errno = EINTR;
 		return;
@@ -69,8 +70,10 @@ pgwin32_signal_initialize(void)
 	int			i;
 	HANDLE		signal_thread_handle;
 
+	// 初始化临界区
 	InitializeCriticalSection(&pg_signal_crit_sec);
 
+	// port.h #define PG_SIGNAL_COUNT 32
 	for (i = 0; i < PG_SIGNAL_COUNT; i++)
 	{
 		pg_signal_array[i] = SIG_DFL;
@@ -80,18 +83,21 @@ pgwin32_signal_initialize(void)
 	pg_signal_queue = 0;
 
 	/* Create the global event handle used to flag signals */
+	// 在port/win32/signal.c的pg_usleep中判断是否有Event发生，并调用pgwin32_dispatch_queued_signals处理
 	pgwin32_signal_event = CreateEvent(NULL, TRUE, FALSE, NULL);
 	if (pgwin32_signal_event == NULL)
 		ereport(FATAL,
 				(errmsg_internal("failed to create signal event: %d", (int) GetLastError())));
 
 	/* Create thread for handling signals */
+	// 创建线程，通过管道接收客户端信号
 	signal_thread_handle = CreateThread(NULL, 0, pg_signal_thread, NULL, 0, NULL);
 	if (signal_thread_handle == NULL)
 		ereport(FATAL,
 				(errmsg_internal("failed to create signal handler thread")));
 
 	/* Create console control handle to pick up Ctrl-C etc */
+	// 加载控制台关闭事件的勾子函数 pg_console_handler（激活SIGINT信号，并启动事件pgwin32_signal_event）
 	if (!SetConsoleCtrlHandler(pg_console_handler, TRUE))
 		ereport(FATAL,
 				(errmsg_internal("failed to set console control handler")));
@@ -107,6 +113,7 @@ pgwin32_dispatch_queued_signals(void)
 {
 	int			i;
 
+	// 进入临界区，加锁
 	EnterCriticalSection(&pg_signal_crit_sec);
 	while (UNBLOCKED_SIGNAL_QUEUE())
 	{
@@ -118,6 +125,7 @@ pgwin32_dispatch_queued_signals(void)
 			if (exec_mask & sigmask(i))
 			{
 				/* Execute this signal */
+				// pg_signal_array 中保存的是信号处理函数handle
 				pqsigfunc	sig = pg_signal_array[i];
 
 				if (sig == SIG_DFL)
@@ -126,6 +134,7 @@ pgwin32_dispatch_queued_signals(void)
 				if (sig != SIG_ERR && sig != SIG_IGN && sig != SIG_DFL)
 				{
 					LeaveCriticalSection(&pg_signal_crit_sec);
+					// 这里调用 pg_signal_array 中的处理函数handle
 					sig(i);
 					EnterCriticalSection(&pg_signal_crit_sec);
 					break;		/* Restart outer loop, in case signal mask or
@@ -159,6 +168,7 @@ pqsigsetmask(int mask)
 
 
 /* signal manipulation. Only called on main thread, no sync required */
+// 将处理函数的handler更新到对应的sigNum，保存在pg_signal_array中
 pqsigfunc
 pqsignal(int signum, pqsigfunc handler)
 {
@@ -207,14 +217,20 @@ pg_queue_signal(int signum)
 	if (signum >= PG_SIGNAL_COUNT || signum <= 0)
 		return;
 
+	// 多线程操作
+    // 进入临界区/加锁
 	EnterCriticalSection(&pg_signal_crit_sec);
+	// port/win32.h  #define sigmask(sig) ( 1 << ((sig)-1) )
 	pg_signal_queue |= sigmask(signum);
+	// 退出临界区
 	LeaveCriticalSection(&pg_signal_crit_sec);
 
+	// 在port/win32/signal.c中pg_usleep中等待事件触发
 	SetEvent(pgwin32_signal_event);
 }
 
 /* Signal dispatching thread */
+// 接收客户端通过管道发来的信号，并处理
 static DWORD WINAPI
 pg_signal_dispatch_thread(LPVOID param)
 {
@@ -222,6 +238,7 @@ pg_signal_dispatch_thread(LPVOID param)
 	BYTE		sigNum;
 	DWORD		bytes;
 
+	// 获得信号量sigNum
 	if (!ReadFile(pipe, &sigNum, 1, &bytes, NULL))
 	{
 		/* Client died before sending */
@@ -240,11 +257,13 @@ pg_signal_dispatch_thread(LPVOID param)
 	DisconnectNamedPipe(pipe);
 	CloseHandle(pipe);
 
+	// 设置信号量，并激活Event
 	pg_queue_signal(sigNum);
 	return 0;
 }
 
 /* Signal handling thread */
+// 创建管道，等待连接，有连接后启动pg_signal_dispatch_thread线程处理
 static DWORD WINAPI
 pg_signal_thread(LPVOID param)
 {
@@ -258,8 +277,10 @@ pg_signal_thread(LPVOID param)
 		BOOL		fConnected;
 		HANDLE		hThread;
 
+		// 始终保持管道存在
 		if (pipe == INVALID_HANDLE_VALUE)
 		{
+		    // 创建命名管道
 			pipe = CreateNamedPipe(pipename, PIPE_ACCESS_DUPLEX,
 					   PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
 							   PIPE_UNLIMITED_INSTANCES, 16, 16, 1000, NULL);
@@ -272,9 +293,11 @@ pg_signal_thread(LPVOID param)
 			}
 		}
 
+		// 等待客户端连接命名管道，阻塞
 		fConnected = ConnectNamedPipe(pipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
 		if (fConnected)
 		{
+		    // pg_signal_dispatch_thread 从管道接收客户端发来的信号，设置信号量，并激活事件处理
 			hThread = CreateThread(NULL, 0,
 						  (LPTHREAD_START_ROUTINE) pg_signal_dispatch_thread,
 								   (LPVOID) pipe, 0, NULL);
@@ -305,6 +328,7 @@ pg_console_handler(DWORD dwCtrlType)
 		dwCtrlType == CTRL_CLOSE_EVENT ||
 		dwCtrlType == CTRL_SHUTDOWN_EVENT)
 	{
+	    // 设置信号量pg_signal_queue，并激活事件 pgwin32_signal_event
 		pg_queue_signal(SIGINT);
 		return TRUE;
 	}

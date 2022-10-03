@@ -55,6 +55,10 @@ typedef struct MemoryAccountDeserializerCxt
 	 * The root will have a pseudo MemoryAccount (as we don't have a tree, and
 	 * RolloverMemoryAccount, and TopMemoryAccount both are top-level) and everything
 	 * will be direct/indirect children of it.
+	 *
+	 * 我们就地构建MemoryAccount数组，重用“buffer”的内存。
+	 * 根目录将有一个伪MemoryAccount（因为我们没有树，RolloverMemoryAccord和TopMemoryAccold都是顶级的），
+	 * 所有内容都是它的直接/间接子目录。
 	 */
 	MemoryAccount *root; /* Array of MemoryAccount [0...memoryAccountCount-1] */
 } MemoryAccountDeserializerCxt;
@@ -130,45 +134,60 @@ SaveMemoryBufToDisk(struct StringInfoData *memoryBuf, char *prefix);
  * the tree, we immediately create other "useful" nodes such as "Rollover"
  * and "Top" and switch to "Top". Logical root can only have two children:
  * TopMemoryAccount and RolloverMemoryAccount
+ *
+ * 这是内存记帐树的根。所有其他帐户都在此节点下。
+ * 我们称之为“逻辑根”，因为任何人都不应该使用它或意识到它。
+ * 创建“逻辑根”来保存树的根之后，我们立即创建其他“有用”节点，如“Rollover”和“Top”，然后切换到“Top“。
+ * 逻辑根只能有两个子级：TopMemoryAccount和RolloverMemoryAccord
  */
 MemoryAccount *MemoryAccountTreeLogicalRoot = NULL;
 
-/* TopMemoryAccount is the father of all memory accounts EXCEPT RolloverMemoryAccount */
+/* TopMemoryAccount is the father of all memory accounts EXCEPT RolloverMemoryAccount
+ * TopMemoryAccount是除RolloverMemoryAccord之外的所有内存帐户的父级
+ */
 MemoryAccount *TopMemoryAccount = NULL;
 /*
  * ActiveMemoryAccount is used by memory allocator to record the allocation.
  * However, deallocation uses the allocator information and ignores ActiveMemoryAccount
+ * 内存分配器使用ActiveMemoryAccount记录分配。但是，取消分配使用分配器信息并忽略ActiveMemoryAccount
  */
 MemoryAccount *ActiveMemoryAccount = NULL;
-/* MemoryAccountMemoryAccount saves the memory overhead of memory accounting itself */
+/* MemoryAccountMemoryAccount saves the memory overhead of memory accounting itself
+ * 内存帐户MemoryAccount节省内存记帐本身的内存开销
+ * */
 MemoryAccount *MemoryAccountMemoryAccount = NULL;
 
 /*
  * SharedChunkHeadersMemoryAccount is used to track all the allocations
  * made for shared chunk headers
+ * SharedChunkHeadersMemoryAccount用于跟踪为共享区块标头所做的所有分配
  */
 MemoryAccount *SharedChunkHeadersMemoryAccount = NULL;
 
 /*
  * RolloverMemoryAccount is used during resetting memory accounting to record
  * allocations that were not freed before the reset process
+ * RolloverMemoryAccount用于重置内存记帐，以记录在重置过程之前未释放的分配
  */
 MemoryAccount *RolloverMemoryAccount = NULL;
 /*
  * AlienExecutorMemoryAccount is a shared executor node account across all the
  * plan nodes that are not supposed to execute in current slice
+ * AlienExecutorMemoryAccount是一个共享的执行器节点帐户，它跨越所有不应该在当前切片中执行的计划节点
  */
 MemoryAccount *AlienExecutorMemoryAccount = NULL;
 
 /*
  * Total outstanding (i.e., allocated - freed) memory across all
  * memory accounts, including RolloverMemoryAccount
+ * 所有内存帐户（包括RolloverMemoryAccount）的未结（即已分配-已释放）内存总量
  */
 uint64 MemoryAccountingOutstandingBalance = 0;
 
 /*
  * Peak memory observed across all allocations/deallocations since
  * last MemoryAccounting_Reset() call
+ * 自上次MemoryAccounting_Reset（）调用以来，在所有分配/解除分配中观察到的内存峰值
  */
 uint64 MemoryAccountingPeakBalance = 0;
 
@@ -182,6 +201,10 @@ uint64 MemoryAccountingPeakBalance = 0;
  * Instead we release in bulk all the live allocations'
  * accounting into the RollOverMemoryAccount during
  * generation change.
+ *
+ * 当前内存记帐树的生成。每个分配都会将此生成保存在其header中。
+ * 稍后在内存释放期间，如果内存的帐户生成与当前生成不匹配，那么我们不会尝试释放内存块的内存帐户。
+ * 相反，我们在生成更改期间将所有实时分配的记帐批量发布到RollOverMemoryAccount中。
  */
 uint16 MemoryAccountingCurrentGeneration = 0;
 
@@ -193,6 +216,7 @@ uint16 MemoryAccountingCurrentGeneration = 0;
  *		Resets the memory account. "Reset" in memory accounting means wiping
  *		off all the accounts' balance clean, and transferring the ownership
  *		of all live allocations to the "rollover" account.
+ *		重置内存帐户。“重置”内存记帐意味着清除所有帐户的余额，并将所有实时分配的所有权转移到“滚动”帐户。
  */
 void
 MemoryAccounting_Reset()
@@ -200,6 +224,7 @@ MemoryAccounting_Reset()
 	/*
 	 * Attempt to reset only if we already have setup memory accounting
 	 * and the memory monitoring is ON
+	 * 仅当我们已经设置了内存记帐并且内存监视处于ON状态时，才尝试重置
 	 */
 	if (MemoryAccountTreeLogicalRoot)
 	{
@@ -237,6 +262,7 @@ MemoryAccounting_ResetPeakBalance()
  *		Public method to create a memory account. We use this to force outside
  *		world to accept the current memory account as the parent of the new memory
  *		account.
+ *		创建内存帐户的公共方法。我们使用它来强制外部世界接受当前内存帐户作为新内存帐户的父级。
  *
  * maxLimitInKB: The quota information of this account in KB unit
  * ownerType: Owner type (e.g., different executor nodes). The memory
@@ -254,6 +280,7 @@ MemoryAccounting_CreateAccount(long maxLimitInKB, MemoryOwnerType ownerType)
  *		Switches the memory account. From this point on, any allocation will
  *		be charged to this new account. Note: we always charge deallocation to
  *		the owner of the memory who originally allocated that memory.
+ *		切换内存帐户。从现在起，任何分配都将记入此新帐户。注意：我们总是向最初分配该内存的内存所有者收取释放费用。
  *
  * desiredAccount: The account to switch to.
  */
@@ -456,6 +483,12 @@ MemoryAccounting_Serialize(StringInfoData *buffer)
  * 		Only the "logical root" is allocated in this function in the current memory context.
  * 		If the serialized bits have shorter life span than expected, it is callers
  * 		responsibility to correctly memcpy into the longer living context as appropriate.
+ * 		就地构造MemoryAccountTree。
+ * 		注意：该函数不分配任何新内存。
+ * 		相反，它假定一组二进制位最初表示内存记帐树。
+ * 		它更新“序列化位”以正确恢复表示树的原始指针。
+ * 		在当前内存上下文中，此函数中只分配“逻辑根”。
+ * 		如果序列化位的寿命比预期的要短，则调用方有责任酌情将内存正确地存储到更长的生存上下文中。
  *
  * serializedBits: The array of bits that represents the serialized bits of the
  * 		memory accounting tree
@@ -703,6 +736,8 @@ InitializeMemoryAccount(MemoryAccount *newAccount, long maxLimit, MemoryOwnerTyp
  * ownerType: Gross owner type (e.g., different executor nodes). The memory
  * 		accounts are hierarchical, so using the tree location we will differentiate
  * 		between owners of same gross type (e.g., two sequential scan owners).
+ * 		总所有者类型（例如，不同的执行者节点）。
+ * 		内存帐户是分层的，因此使用树位置，我们将区分相同总类型的所有者（例如，两个顺序扫描所有者）。
  * parent: The parent account of this account.
  */
 static MemoryAccount*
@@ -717,6 +752,7 @@ CreateMemoryAccountImpl(long maxLimit, MemoryOwnerType ownerType, MemoryAccount*
 	/*
 	 * Rollover is a special MemoryAccount that resides at the
 	 * TopMemoryContext, and not under MemoryAccountMemoryContext
+	 * Rollover是一个特殊的MemoryAccount，它驻留在TopMemoryContext中，而不是MemoryAccessMemoryContex下
 	 */
     Assert(ownerType == MEMORY_OWNER_TYPE_LogicalRoot || ownerType == MEMORY_OWNER_TYPE_SharedChunkHeader ||
     		ownerType == MEMORY_OWNER_TYPE_Rollover || ownerType == MEMORY_OWNER_TYPE_MemAccount ||
@@ -779,6 +815,7 @@ CreateMemoryAccountImpl(long maxLimit, MemoryOwnerType ownerType, MemoryAccount*
  * CheckMemoryAccountingLeak
  *		Checks for leaks (i.e., memory accounts with balance) after everything
  *		is reset.
+ *		重置所有内容后，检查是否存在泄漏（即，内存帐户是否平衡）。
  */
 static void
 CheckMemoryAccountingLeak()
@@ -791,6 +828,8 @@ CheckMemoryAccountingLeak()
  * 		Walks one node of the MemoryAccount tree, and calls MemoryAccountWalkKids
  * 		to walk children recursively (given the walk is sanctioned by the current node).
  * 		For each walk it calls the provided function to do some "processing"
+ * 		遍历MemoryAccount树的一个节点，并调用MemoryAccessWalkKids递归遍历子节点（假定当前节点允许遍历）。
+ * 		对于每次遍历，它都会调用提供的函数进行一些“处理”
  *
  * memoryAccount: The current memory account to walk
  * visitor: The function pointer that is interested to process this node
@@ -1003,6 +1042,8 @@ SerializeMemoryAccount(MemoryAccount *memoryAccount, void *context, uint32 depth
  *		Internal method that should only be used to initialize a memory accounting
  *		subsystem. Creates basic data structure such as the MemoryAccountMemoryContext,
  *		TopMemoryAccount, MemoryAccountMemoryAccount
+ *		只应用于初始化内存记帐子系统的内部方法。
+ *		创建基本数据结构，如MemoryAccountMemoryContext、TopMemoryAccess、MemoryAccessMemoryAccord
  */
 static void
 InitMemoryAccounting()
@@ -1021,8 +1062,10 @@ InitMemoryAccounting()
 	 *
 	 * The above 5 survive reset (MemoryAccountMemoryContext
 	 * gets reset, but not deleted).
+	 * 上述5个在重置后仍然有效（MemoryAccountMemoryContext被重置，但未被删除）。
 	 *
 	 * Next set ActiveMemoryAccount = MemoryAccountMemoryAccount
+	 * 接下来设置ActiveMemoryAccount=MemoryAccessMemoryAccord Note，
 	 *
 	 * Note, don't set MemoryAccountMemoryAccount before creating
 	 * MemoryAccuontMemoryContext, as that will put the balance
@@ -1030,25 +1073,37 @@ InitMemoryAccounting()
 	 * preventing it from going to 0, upon reset of MemoryAccountMemoryContext.
 	 * MemoryAccountMemoryAccount should only contain balance from actual
 	 * account creation, not the overhead of the context.
+	 * 在创建MemoryAccoutMemoryContext之前不要设置MemoryAccAccountMemoryAccold，
+	 * 因为这样会将MemoryAccumountMemoryContext的余额放入MemoryAccomountMemoryaccount中，
+	 * 防止在重置MemoryAccultMemoryContact时它变为0。
+	 * MemoryAccountMemoryAccord应该只包含实际帐户创建的余额，而不是上下文的开销。
 	 *
 	 * Once the long living accounts are done and MemoryAccountMemoryAccount
 	 * is the ActiveMemoryAccount, we proceed to create TopMemoryAccount
+	 * 一旦完成长期账户，并且MemoryAccountMemoryAccord是ActiveMemoryAccessor，
+	 * 我们将继续创建TopMemoryAccold。
 	 *
 	 * This ensures the following:
 	 *
 	 * 1. Accounting is triggered only if the ActiveMemoryAccount is non-null
+	 * 1.仅当ActiveMemoryAccount为非空时才会触发记帐。
 	 *
 	 * 2. If the ActiveMemoryAccount is non-null, we are guaranteed to have
 	 * SharedChunkHeadersMemoryAccount, so that we can account shared chunk headers
+	 * 2.如果ActiveMemory帐户为非空，我们将保证拥有SharedChunkHeadersMemoryAccess，以便我们可以记帐共享区块头
 	 *
 	 * 3. All short-living accounts (including Top) are accounted in MemoryAccountMemoryAccount
+	 * 3.所有短期活期账户（包括Top）都在MemoryAccountMemoryAccess4中记账。
 	 *
 	 * 4. All short-living accounts are allocated in MemoryAccountMemoryContext
+	 * 4.所有短期活度账户都在MemaryAccountMemoryContext
 	 *
 	 * 5. Number of allocations in the aset.c with nullAccountHeader is very small
 	 * as we turn on ActiveMemoryAccount immediately after we allocate long-living
 	 * accounts (only the memory to host long-living accounts are unaccounted, which
 	 * are very few and their overhead is already known).
+	 * 5.集合中的分配数。带有nullAccountHeader的c非常小，因为我们在分配长期帐户后立即打开ActiveMemoryAccount
+	 * （只有用于托管长期帐户的内存未计算在内，这些内存非常少，并且它们的开销已经知道）。
 	 */
 
 	if (MemoryAccountTreeLogicalRoot == NULL)
@@ -1127,6 +1182,7 @@ InitMemoryAccounting()
  * AdvanceMemoryAccountingGeneration
  * 		Saves the outstanding balance of current generation into RolloverAccount,
  * 		and advances the current generation.
+ * 		将当前的未结余额保存到RolloverAccount，并提升当前代。
  */
 static void
 AdvanceMemoryAccountingGeneration()
@@ -1136,6 +1192,8 @@ AdvanceMemoryAccountingGeneration()
 	 * change ActiveMemoryAccount to RolloverMemoryAccount which
 	 * is the only account to survive this MemoryAccountMemoryContext
 	 * reset.
+	 * 我们将删除MemoryAccountMemoryContext，因此请将ActiveMemoryAccord更改为RolloverMemoryAccold，
+	 * 这是唯一一个能够在这次MemoryAccessMemoryContact重置中幸存下来的帐户。
 	 */
 	ActiveMemoryAccount = RolloverMemoryAccount;
 	MemoryContextReset(MemoryAccountMemoryContext);
@@ -1146,6 +1204,8 @@ AdvanceMemoryAccountingGeneration()
 	 * Reset MemoryAccountMemoryAccount so that one query doesn't take the blame
 	 * of another query. Note, this is different than RolloverMemoryAccount,
 	 * whose purpose is to carry balance between multiple reset
+	 * 重置MemoryAccountMemoryAccord，以便一个查询不会承担另一个查询的责任。
+	 * 注意，这与RolloverMemoryAccount不同，后者的目的是在多次重置之间进行平衡
 	 */
 	MemoryAccountMemoryAccount->allocated = 0;
 	MemoryAccountMemoryAccount->freed = 0;
@@ -1160,6 +1220,8 @@ AdvanceMemoryAccountingGeneration()
 	 * Rollover's peak includes SharedChunkHeadersMemoryAccount to give us
 	 * an idea of highest seen peak across multiple reset. Note: MemoryAccountingPeakBalance
 	 * includes SharedChunkHeadersMemoryAccount balance.
+	 * Rollover的峰值包括SharedChunkHeadersMemoryAccount，可以让我们了解多次重置中的最高峰值。
+	 * 注：MemoryAccountingPeakBalance包括SharedChunkHeadersMemoryAccess余额。
 	 */
 	RolloverMemoryAccount->peak = Max(RolloverMemoryAccount->peak, MemoryAccountingPeakBalance);
 

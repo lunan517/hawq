@@ -109,6 +109,11 @@
  *
  * Blocks allocated to hold oversize chunks do not follow this rule, however;
  * they are just however big they need to be to hold that single chunk.
+ *
+ * 分配给allocset的第一个块的大小为initBlockSize。
+ * 每次我们必须分配另一个块时，我们将块大小加倍（如果可能，并且不超过maxBlockSize），以减少malloc（）上的簿记负载。
+ * 然而，分配用于容纳超大块的块不遵循此规则；
+ * 他们只是需要有多大才能容纳这一块。
  *--------------------
  */
 
@@ -132,6 +137,12 @@ typedef void *AllocPointer;
  *
  *		AllocBlockData is the header data for a block --- the usable space
  *		within the block begins at the next alignment boundary.
+ *
+ *		AllocBlock是aset.c从malloc（）获取内存的内存单位。
+ *		它包含一个或多个AllocChunk，这些是palloc（）请求并由pfree（）释放的单元。
+ *		AllocChunk不能单独返回给malloc（），而是由pfree（）将它们放在自由列表中，
+ *		并由具有匹配请求大小的下一个palloc（）重新使用。
+ *		AllocBlockData是一个块的头数据——块中的可用空间从下一个对齐边界开始。
  */
 typedef struct AllocBlockData
 {
@@ -144,8 +155,9 @@ typedef struct AllocBlockData
 /*
  * AllocChunk
  *		The prefix of each piece of memory in an AllocBlock
- *
+ *      AllocBlock中每个内存段的前缀
  * NB: this MUST match StandardChunkHeader as defined by utils/memutils.h.
+ *      这必须与utils/memutils.h定义的StandardChunkHeader匹配。
  */
 typedef struct AllocChunkData
 {
@@ -155,6 +167,10 @@ typedef struct AllocChunkData
 	  * generation of memory account, memory context that owns this
 	  * chunk etc. However, in case of a free chunk, this pointer
 	  * actually refers to the next chunk in the free list.
+	  *
+	  * SharedChunkHeader存储多个区块之间的所有“共享”详细信息，
+	  * 例如要收费的memoryAccount、内存帐户的生成、拥有此区块的内存上下文等。
+	  * 然而，如果是空闲区块，此指针实际上指空闲列表中的下一个区块。
 	  */
 	struct SharedChunkHeader* sharedHeader;
 
@@ -165,6 +181,10 @@ typedef struct AllocChunkData
 	 * size of the client. Though we may end up allocating a larger block
 	 * because of AllocSet overhead, optimistic reuse of chunks
 	 * and alignment of chunk size at the power of 2
+	 *
+	 * 区块的“请求大小”。这是客户机的预期分配大小。
+	 * 尽管由于AllocSet的开销，我们可能最终会分配一个更大的块，
+	 * 但乐观地重用块并以2的幂对齐块大小
 	 */
 #ifdef MEMORY_CONTEXT_CHECKING
 	/* when debugging memory usage, also store actual requested size */
@@ -309,18 +329,23 @@ MemoryAccounting_Allocate(struct MemoryAccount* memoryAccount,
 	Assert(memoryAccount->allocated + allocatedSize >=
 			memoryAccount->allocated);
 
+	// 累加已分配内存量
 	memoryAccount->allocated += allocatedSize;
 
+	// 已分配未释放的内存量
 	Size held = memoryAccount->allocated -
 			memoryAccount->freed;
 
+	// 记录内存用量峰值
 	memoryAccount->peak =
 			Max(memoryAccount->peak, held);
 
 	Assert(memoryAccount->allocated >=
 			memoryAccount->freed);
 
+	// 累加未结余额
 	MemoryAccountingOutstandingBalance += allocatedSize;
+	// 未结余额的峰值
 	MemoryAccountingPeakBalance = Max(MemoryAccountingPeakBalance, MemoryAccountingOutstandingBalance);
 
 	return true;
@@ -332,6 +357,10 @@ MemoryAccounting_Allocate(struct MemoryAccount* memoryAccount,
  *		can customize its free request function. When memory is deallocated,
  *		this function will be called by the underlying allocator to record deallocation.
  *		This function records the amount of memory freed.
+ *		自由请求处理程序的“一”实现。每个内存帐户都可以自定义其免费请求功能。
+ *		当内存被释放时，底层分配器将调用此函数来记录释放。此函数用于记录释放的内存量。
+ *
+ *		在内存账户中记录“内存释放量”
  *
  * memoryAccount: where to record this allocation
  * context: the context where this memory belongs
@@ -341,6 +370,8 @@ MemoryAccounting_Allocate(struct MemoryAccount* memoryAccount,
  * the allocation is different than the current generation. In such case
  * this method would automatically select RolloverMemoryAccount, instead
  * of accessing an invalid pointer.
+ * 如果分配的生成与当前生成不同，则memoryAccount可能是无效指针。
+ * 在这种情况下，此方法将自动选择RolloverMemoryAccount，而不是访问无效指针。
  */
 bool
 MemoryAccounting_Free(MemoryAccount* memoryAccount, uint16 memoryAccountGeneration, struct MemoryContextData *context, Size allocatedSize)
@@ -364,8 +395,10 @@ MemoryAccounting_Free(MemoryAccount* memoryAccount, uint16 memoryAccountGenerati
 
 	Assert(memoryAccount->allocated >= memoryAccount->freed);
 
+	// 累加到已释放内存量
 	memoryAccount->freed += allocatedSize;
 
+	// 减少未结余额
 	MemoryAccountingOutstandingBalance -= allocatedSize;
 
 	Assert(MemoryAccountingOutstandingBalance >= 0);
@@ -618,6 +651,11 @@ AllocAllocInfo(AllocSet set, AllocChunk chunk, bool isHeader)
 	 * (i.e., this chunk is the head). To detect generic case, we need another flag, which we
 	 * are avoiding here. Also note, if chunk is the head, then it will create a circular linked
 	 * list, otherwise we might just corrupt the linked list
+	 *
+	 * 我们不会双重调用AllocAllocInfo，其中chunk是allocList中唯一的chunk。
+	 * 注意：只有当allocList当前指向此块（即，此块是头）时，才能检测到双重调用。
+	 * 为了检测一般情况，我们需要另一个标志，我们在这里要避免这个标志。
+	 * 还要注意，如果chunk是head，那么它将创建一个循环链表，否则我们可能会破坏链表
 	 */
 	Assert(!chunk->next_chunk || chunk != set->allocList);
 
@@ -641,6 +679,8 @@ AllocAllocInfo(AllocSet set, AllocChunk chunk, bool isHeader)
  *		Depending on the size of an allocation compute which freechunk
  *		list of the alloc set it belongs to.  Caller must have verified
  *		that size <= ALLOC_CHUNK_LIMIT.
+ *		根据分配的大小，计算它所属的分配集的空闲区块列表。
+ *		调用方必须已验证大小<=alloc_CHUNK_LIMIT。
  * ----------
  */
 static inline int
@@ -697,7 +737,7 @@ randomize_mem(char *ptr, size_t size)
 /*
  * AllocSetContextCreate
  *		Create a new AllocSet context.
- *
+ *      创建新的AllocSet上下文。
  * parent: parent context, or NULL if top-level context
  * name: name of context (for debugging --- string will be copied)
  * minContextSize: minimum context size
@@ -714,6 +754,8 @@ AllocSetContextCreate(MemoryContext parent,
 	AllocSet	context;
 
 	/* Do the type-independent part of context creation */
+	// 上下文中类型无关部分的创建
+	// typedef struct AllocSetContext
 	context = (AllocSet) MemoryContextCreate(T_AllocSetContext,
 											 sizeof(AllocSetContext),
 											 &AllocSetMethods,
@@ -722,8 +764,9 @@ AllocSetContextCreate(MemoryContext parent,
 
 	/*
 	 * Make sure alloc parameters are reasonable, and save them.
-	 *
+	 * 确保分配参数合理，并保存。
 	 * We somewhat arbitrarily enforce a minimum 1K block size.
+	 * 我们有点武断地强制执行最小1K块大小。
 	 */
 	initBlockSize = MAXALIGN(initBlockSize);
 	if (initBlockSize < 1024)
@@ -743,6 +786,7 @@ AllocSetContextCreate(MemoryContext parent,
 
 	/*
 	 * Grab always-allocated space, if requested
+	 * 如果需要，始终抓取分配的空间
 	 */
 	if (minContextSize > ALLOC_BLOCKHDRSZ + ALLOC_CHUNKHDRSZ)
 	{
@@ -761,6 +805,7 @@ AllocSetContextCreate(MemoryContext parent,
 		block->next = context->blocks;
 		context->blocks = block;
 		/* Mark block as not to be released at reset time */
+		// 将块标记为在重置时不释放
 		context->keeper = block;
 
         MemoryContextNoteAlloc(&context->header, blksize);              /*CDB*/
@@ -770,6 +815,11 @@ AllocSetContextCreate(MemoryContext parent,
          * allocation/deallocation by the memory user. This block is preemptively
          * allocating memory, which is "unused" by actual consumers. Therefore,
          * memory accounting currently wouldn't track this
+         *
+         * 我们正在这个块中分配新内存，但我们没有考虑这一点。
+         * 内存记帐的概念是跟踪内存用户的实际分配/释放。
+         * 这个块抢先分配内存，而实际用户“未使用”内存。
+         * 因此，内存记帐目前无法跟踪此情况
          */
 	}
 
@@ -1099,6 +1149,8 @@ AllocSetAllocImpl(MemoryContext context, Size size, bool isHeader)
 	 * corresponding free list to see if there is a free chunk we could reuse.
 	 * If one is found, remove it from the free list, make it again a member
 	 * of the alloc set and return its data address.
+	 * 请求足够小，可以作为块处理。查看相应的空闲列表，看看是否有可以重用的空闲块。
+	 * 如果找到一个，将其从空闲列表中删除，使其再次成为分配集的成员，并返回其地址。
 	 */
 	fidx = AllocSetFreeIndex(size);
 	chunk = set->freelist[fidx];

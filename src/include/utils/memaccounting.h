@@ -76,6 +76,8 @@ extern bool gp_dump_memory_usage;
 /*
  * Each memory account can assume one of the following memory
  * owner types
+ *
+ * 每个内存帐户可以采用以下内存所有者类型之一
  */
 typedef enum MemoryOwnerType
 {
@@ -168,7 +170,9 @@ extern uint64 MemoryAccountingPeakBalance;
 
 extern uint16 MemoryAccountingCurrentGeneration;
 
-/* MemoryAccount is the fundamental data structure to record memory usage */
+/* MemoryAccount is the fundamental data structure to record memory usage
+ * MemoryAccount是记录内存使用情况的基本数据结构
+*/
 typedef struct MemoryAccount {
 	NodeTag type;
 	MemoryOwnerType ownerType;
@@ -179,6 +183,7 @@ typedef struct MemoryAccount {
 	/*
 	 * Maximum targeted allocation for an owner. Peak usage can be tracked to
 	 * check if the allocation is overshooting
+	 * 所有者的最大目标分配。可以跟踪峰值使用情况，以检查分配是否超调
 	 */
 	uint64 maxLimit;
 
@@ -186,6 +191,9 @@ typedef struct MemoryAccount {
 	 * that would otherwise be charged to its account, then disownedMemoryAccount
 	 * holds a hidden account which will be used for allocation during a "disowned"
 	 * state (upon calling "DisownMemoryAccount()").
+	 *
+	 * 如果此帐户请求特权“disown”部分分配，否则将向其帐户收费，则disownedMemoryAccount将持有一个隐藏帐户，
+	 * 该帐户将在“disowned”状态期间用于分配（调用“DisownMemoryAccess（）”时）。
 	 */
 	//struct MemoryAccount *disownedMemoryAccount;
 	struct MemoryAccount *parentAccount;
@@ -194,6 +202,10 @@ typedef struct MemoryAccount {
 	 * To traverse the tree of MemoryAccount, start from the Top. Read the firstChild and then read the
 	 * nextSibling of the firstChild. And continue this process. For each of the nextSibling, you can call
 	 * firstChild to descend the tree.
+	 *
+	 * 要遍历MemoryAccount树，请从顶部开始。
+	 * 读第一个孩子，然后读下一个第一个孩子的兄弟姐妹。继续这个过程。
+	 * 对于每一个nextSibling，您可以调用firstChild沿树向下。
 	 */
 	struct MemoryAccount* firstChild;
 	struct MemoryAccount* nextSibling;

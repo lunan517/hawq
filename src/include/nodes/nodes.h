@@ -41,6 +41,11 @@
  * here so that we can add more tags without changing the existing enum's.
  * (Since node tag numbers never exist outside backend memory, there's no
  * real harm in renumbering, it just costs a full rebuild ...)
+ *
+ * 每个节点的第一个字段是NodeTag。
+ * 创建的每个节点（使用makeNode）将具有以下标记之一作为其第一个字段的值。
+ * 请注意，节点标记的编号不是连续的。我们在这里留了一些洞，这样我们就可以添加更多的标签，而不必更改现有的枚举。
+ * （由于节点标记号从不存在于后端内存之外，因此重新编号并没有真正的危害，只需要完全重建……）
  */
 typedef enum NodeTag
 {
@@ -233,7 +238,7 @@ typedef enum NodeTag
 	T_Grouping,
 	T_GroupId,
 	T_IntoClause,
-  T_AggOrder,
+    T_AggOrder,
 	T_PercentileExpr,
 	T_DMLActionExpr,
 	T_PartOidExpr,
@@ -522,6 +527,9 @@ typedef enum NodeTag
 	 * structures, but we give them NodeTags anyway for identification
 	 * purposes (usually because they are involved in APIs where we want to
 	 * pass multiple object types through the same pointer).
+	 *
+	 * *这些对象不属于解析/计划/执行节点树结构的一部分，但我们还是为它们提供了NodeTag以进行标识
+	 * （通常是因为它们涉及到API中，我们希望通过同一个指针传递多个对象类型）。
 	 */
 	T_TriggerData = 900,		    /* in commands/trigger.h */
 	T_ReturnSetInfo,			    /* in nodes/execnodes.h */

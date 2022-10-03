@@ -116,6 +116,14 @@ MemoryContext PortalContext = NULL;
  * by virtue of being forked off the postmaster).
  *
  * In a standalone backend this must be called during backend startup.
+ *
+ * 启动内存上下文子系统。
+ * 必须在创建上下文或在上下文中分配内存之前调用此函数。
+ * TopMemoryContext和ErrorContext在此初始化；之后必须创建其他上下文。
+ *
+ * 在正常的多后端操作中，这在postmaster启动期间调用一次，
+ * 而完全不是由单个后端启动调用（因为后端继承了一个已经初始化的上下文子系统，因为它是从postmastor分叉的）。
+ * 在独立后端中，必须在后端启动期间调用此函数。
  */
 void
 MemoryContextInit(void)
@@ -129,6 +137,10 @@ MemoryContextInit(void)
 	 * --- we don't really expect much to be allocated in it.
 	 *
 	 * (There is special-case code in MemoryContextCreate() for this call.)
+	 *
+	 * 将TopMemoryContext初始化为增长速度慢的AllocSetContext
+	 * ---我们真的不希望在其中分配太多。
+	 * （MemoryContextCreate（）中有此调用的特殊情况代码。）
 	 */
 	TopMemoryContext = AllocSetContextCreate((MemoryContext) NULL,
 											 "TopMemoryContext",
@@ -139,6 +151,8 @@ MemoryContextInit(void)
 	/*
 	 * Not having any other place to point CurrentMemoryContext, make it point
 	 * to TopMemoryContext.  Caller should change this soon!
+	 * 没有其他位置指向CurrentMemoryContext，
+	 * 请指出TopMemoryContext。来电者应尽快更改此设置！
 	 */
 	CurrentMemoryContext = TopMemoryContext;
 
@@ -149,6 +163,11 @@ MemoryContextInit(void)
 	 * where retained memory in a context is *essential* --- we want to be
 	 * sure ErrorContext still has some memory even if we've run out
 	 * elsewhere!
+	 *
+	 * 将ErrorContext初始化为增长速度慢的AllocSetContext，我们并不期望在其中分配太多内容。
+	 * 更重要的是，要求它始终至少包含8K。
+	 * 这是上下文中保留内存至关重要的唯一情况
+	 * ---我们希望确保ErrorContext仍然有一些内存，即使我们在其他地方用完了！
 	 */
 	ErrorContext = AllocSetContextCreate(TopMemoryContext,
 										 "ErrorContext",
@@ -963,38 +982,56 @@ MemoryContextContainsGenericAllocation(MemoryContext context, void *pointer)
 /*--------------------
  * MemoryContextCreate
  *		Context-type-independent part of context creation.
- *
+ *      上下文创建的上下文类型独立部分。
  * This is only intended to be called by context-type-specific
  * context creation routines, not by the unwashed masses.
+ * 这只打算由上下文类型特定的上下文创建例程调用，而不是由未清洗的大众调用。
  *
  * The context creation procedure is a little bit tricky because
  * we want to be sure that we don't leave the context tree invalid
  * in case of failure (such as insufficient memory to allocate the
  * context node itself).  The procedure goes like this:
+ * 上下文创建过程有点棘手，因为我们希望确保在出现故障时不会使上下文树无效
+ * （例如，内存不足，无法分配上下文节点本身）。
+ * 程序如下：
  *	1.	Context-type-specific routine first calls MemoryContextCreate(),
  *		passing the appropriate tag/size/methods values (the methods
  *		pointer will ordinarily point to statically allocated data).
  *		The parent and name parameters usually come from the caller.
+ *		1.上下文类型特定的例程首先调用MemoryContextCreate（），
+ *		传递适当的标记/大小/方法值（方法指针通常指向静态分配的数据）。
+ *		父参数和名称参数通常来自调用者。
  *	2.	MemoryContextCreate() attempts to allocate the context node,
  *		plus space for the name.  If this fails we can ereport() with no
  *		damage done.
+ *		2.MemoryContextCreate（）尝试分配上下文节点以及名称的空间。
+ *		如果这样做失败，我们可以在不造成任何损坏的情况下安装（）。
  *	3.	We fill in all of the type-independent MemoryContext fields.
+ *	    3.我们填写所有类型独立的MemoryContext字段。
  *	4.	We call the type-specific init routine (using the methods pointer).
  *		The init routine is required to make the node minimally valid
  *		with zero chance of failure --- it can't allocate more memory,
  *		for example.
+ *		4.我们调用类型特定的init例程（使用方法指针）。init例程需要使节点最小有效，
+ *		而失败的机会为零——例如，它不能分配更多内存。
  *	5.	Now we have a minimally valid node that can behave correctly
  *		when told to reset or delete itself.  We link the node to its
  *		parent (if any), making the node part of the context tree.
+ *		5.现在，我们有了一个最小有效节点，当被告知重置或删除自身时，该节点可以正常工作。
+ *		我们将节点链接到其父节点（如果有），使节点成为上下文树的一部分。
  *	6.	We return to the context-type-specific routine, which finishes
  *		up type-specific initialization.  This routine can now do things
  *		that might fail (like allocate more memory), so long as it's
  *		sure the node is left in a state that delete will handle.
+ *		6.我们返回到上下文类型特定的例程，它完成了类型特定的初始化。
+ *		这个例程现在可以执行可能失败的操作（如分配更多内存），只要它确保节点处于delete可以处理的状态。
  *
  * This protocol doesn't prevent us from leaking memory if step 6 fails
  * during creation of a top-level context, since there's no parent link
  * in that case.  However, if you run out of memory while you're building
  * a top-level context, you might as well go home anyway...
+ * 如果步骤6在创建顶级上下文时失败，该协议不会阻止我们泄漏内存，因为在这种情况下没有父链接。
+ * 然而，如果您在构建顶级上下文时内存不足，那么您还是回家吧。。。
  *
  * Normally, the context node and the name are allocated from
  * TopMemoryContext (NOT from the parent context, since the node must
@@ -1002,10 +1039,14 @@ MemoryContextContainsGenericAllocation(MemoryContext context, void *pointer)
  * used to create TopMemoryContext!  If we see that TopMemoryContext is NULL,
  * we assume we are creating TopMemoryContext and use malloc() to allocate
  * the node.
+ * 通常，上下文节点和名称是从TopMemoryContext分配的（不是从父上下文分配的，因为节点必须在其父上下文重置后仍然存在！）。
+ * 然而，此例程本身用于创建TopMemoryContext！如果我们看到TopMemoryContext为NULL，
+ * 则假设我们正在创建TopMemoriyContext并使用malloc（）分配节点。
  *
  * Note that the name field of a MemoryContext does not point to
  * separately-allocated storage, so it should not be freed at context
  * deletion.
+ * 请注意，MemoryContext的name字段不指向单独分配的存储，因此在删除上下文时不应释放它。
  *--------------------
  */
 MemoryContext
@@ -1021,6 +1062,7 @@ MemoryContextCreate(NodeTag tag, Size size,
 	if (TopMemoryContext != NULL)
 	{
 		/* Normal case: allocate the node in TopMemoryContext */
+		// MemoryContextAlloc -> MemoryContextAllocImpl -> AllocSetAllocImpl
 		node = (MemoryContext) MemoryContextAlloc(TopMemoryContext,
 												  needed);
 	}
